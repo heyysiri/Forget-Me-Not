@@ -1,61 +1,55 @@
 import { pipe } from "@screenpipe/js";
 import { NextResponse } from "next/server";
-import { promises as fs } from "fs";
-import path from "path";
+
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 export async function GET() {
   try {
-    const settingsManager = pipe.settings;
-    if (!settingsManager) {
-      throw new Error("settingsManager not found");
-    }
-
-    // Get the pipe name from the current file path
-    const currentFilePath = __filename;
-    const pipesIndex = currentFilePath.indexOf('pipes');
-    const pipeName = currentFilePath.substring(pipesIndex + 6).split(path.sep)[0];
+    console.log("API: Getting Screenpipe settings");
     
-    console.log(`loading settings for pipe: ${pipeName}`);
-
-    // Load persisted settings if they exist
-    const screenpipeDir = process.env.SCREENPIPE_DIR || process.cwd();
-    const settingsPath = path.join(
-      screenpipeDir,
-      "pipes",
-      pipeName,
-      "pipe.json"
-    );
-
+    // First check if Screenpipe is running with a safer method
     try {
-      const settingsContent = await fs.readFile(settingsPath, "utf8");
-      const persistedSettings = JSON.parse(settingsContent);
-      console.log(`loaded persisted settings from ${settingsPath}`);
-
-      // Merge with current settings
-      const rawSettings = await settingsManager.getAll();
-      return NextResponse.json({
-        ...rawSettings,
-        customSettings: {
-          ...rawSettings.customSettings,
-          [pipeName]: {
-            ...(rawSettings.customSettings?.[pipeName] || {}),
-            ...persistedSettings,
-          },
-        },
-      });
-    } catch (err) {
-      // If no persisted settings, return normal settings
-      console.log(`no persisted settings found at ${settingsPath}, using defaults`);
-      const rawSettings = await settingsManager.getAll();
-      return NextResponse.json(rawSettings);
+      // pipe.getStatus() doesn't exist, use settings.getAll() as a check
+      const settings = await pipe.settings.getAll();
+      console.log("API: Screenpipe connection successful");
+    } catch (error) {
+      console.error("API: Failed to connect to Screenpipe. Is the service running?", error);
+      return NextResponse.json(
+        { 
+          error: "Failed to connect to Screenpipe. Is the service running?",
+          // Provide fallback settings
+          aiProviderType: 'ollama',
+          aiModel: 'llama2',
+          aiUrl: 'http://localhost:11434/api/generate'
+        }, 
+        { status: 503 } // Service unavailable
+      );
     }
+    
+    const settings = await pipe.settings.getAll();
+    
+    // Only return the needed settings and strip any sensitive data
+    const sanitizedSettings = {
+      aiProviderType: settings.aiProviderType || 'ollama',
+      aiModel: settings.aiModel || 'llama2',
+      aiUrl: settings.aiUrl || 'http://localhost:11434/api/generate',
+      // Don't include the full API key, just a hint if it exists
+      openaiApiKeyExists: !!settings.openaiApiKey
+    };
+    
+    return NextResponse.json(sanitizedSettings);
   } catch (error) {
-    console.error("failed to get settings:", error);
+    console.error("API: Failed to get settings:", error);
     return NextResponse.json(
-      { error: "failed to get settings" },
+      { 
+        error: "Failed to get settings",
+        // Provide fallback settings
+        aiProviderType: 'ollama',
+        aiModel: 'llama2',
+        aiUrl: 'http://localhost:11434/api/generate'
+      }, 
       { status: 500 }
     );
   }
