@@ -677,6 +677,21 @@ const analyzeAppUsage = async (activities: Activity[]) => {
     // });
   };
 
+  // Clear all todo items
+  const clearAllTodoItems = () => {
+    console.log('Smart Reminder: Clearing all todo items');
+    
+    if (window.confirm('Are you sure you want to clear all items?')) {
+      setTodoList([]);
+      
+      // You can add a toast notification here if desired
+      toast({
+        title: "All reminders cleared",
+        description: "Your to-do list has been cleared.",
+      });
+    }
+  };
+
   // Effect to request notification permissions on component mount
   useEffect(() => {
     console.log("Smart Reminder: Initializing component");
@@ -881,12 +896,24 @@ const analyzeAppUsage = async (activities: Activity[]) => {
 
       <Card>
         <CardHeader>
-          <CardTitle className="flex items-center">
-            <Clock className="w-5 h-5 mr-2" />
-            Your To-Do List
-            <span className="ml-2 text-xs bg-gray-100 px-2 py-1 rounded-full">
-              {todoList.filter(item => item.status !== "completed").length} pending
-            </span>
+          <CardTitle className="flex items-center justify-between">
+            <div className="flex items-center">
+              <Clock className="w-5 h-5 mr-2" />
+              Your To-Do List
+              <span className="ml-2 text-xs bg-gray-100 px-2 py-1 rounded-full">
+                {todoList.filter(item => item.status !== "completed").length} pending
+              </span>
+            </div>
+            {todoList.length > 0 && (
+              <Button 
+                variant="outline" 
+                size="sm" 
+                className="text-red-500 hover:bg-red-50 hover:text-red-600 text-xs"
+                onClick={clearAllTodoItems}
+              >
+                Clear All
+              </Button>
+            )}
           </CardTitle>
         </CardHeader>
         <CardContent>
@@ -903,25 +930,23 @@ const analyzeAppUsage = async (activities: Activity[]) => {
                     <p className={`font-medium ${item.status === "completed" ? "line-through" : ""}`}>
                       {item.title}
                     </p>
-                    <p className="text-sm text-gray-600">{item.description}</p>
-                    <div className="flex flex-wrap gap-2 mt-1">
-                      {item.appContext?.appName && (
-                        <span className="text-xs px-2 py-0.5 bg-blue-100 text-blue-800 rounded-full">
-                          App: {item.appContext.appName}
-                        </span>
-                      )}
-                      <span className="text-xs px-2 py-0.5 bg-gray-100 text-gray-800 rounded-full">
-                        {new Date(item.createdAt).toLocaleTimeString()}
+                    <p className="text-sm text-gray-500">{item.description}</p>
+                    {item.appContext && (
+                      <span className="text-xs bg-gray-100 px-1.5 py-0.5 rounded mt-1 inline-block">
+                        {item.appContext.appName}
                       </span>
-                    </div>
+                    )}
+                    <p className="text-xs text-blue-500 mt-1">
+                      {new Date(item.createdAt).toLocaleString()}
+                    </p>
                   </div>
-                  <div className="flex gap-2">
+                  <div className="flex space-x-1">
                     <Button 
                       size="sm" 
-                      variant="ghost"
+                      variant="ghost" 
+                      className="text-green-500 hover:text-green-600 hover:bg-green-50"
                       onClick={() => markAsCompleted(item.id)}
                       disabled={item.status === "completed"}
-                      className="text-green-600 hover:text-green-700 hover:bg-green-50"
                     >
                       <Check className="w-4 h-4" />
                     </Button>

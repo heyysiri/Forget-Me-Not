@@ -16,34 +16,63 @@ interface Activity {
 // 🛠 Extract structured reminders from AI response text
 function extractSuggestionsFromText(text: string): AnalysisResponse {
   try {
-    const jsonMatch = text.match(/\{[\s\S]*\}/);
-    if (!jsonMatch) return { reminderSuggestions: [], generalInsights: [] };
-
-    const parsed = JSON.parse(jsonMatch[0]) as AIResponse;
+    // Improved JSON extraction pattern that handles more edge cases
+    const jsonMatch = text.match(/(\{[\s\S]*\})/);
     
-    const validSuggestions = (parsed.reminders || [])
-      .filter(reminder => {
-        // Add validation for description quality
-        const hasGoodDescription = 
-          reminder.description.length > 20 && // Minimum length
-          reminder.description !== reminder.title && // Not same as title
-          reminder.description !== reminder.appName && // Not same as app name
-          !reminder.description.includes('undefined') && // No undefined values
-          reminder.confidence >= 0.7; // Minimum confidence
+    if (!jsonMatch) {
+      console.warn('Failed to find JSON structure in AI response');
+      return { reminderSuggestions: [], generalInsights: [] };
+    }
 
-        return hasGoodDescription;
-      })
-      .map(reminder => ({
-        ...reminder,
-        priority: reminder.priority || 'medium'
-      }));
+    let jsonString = jsonMatch[0];
+    
+    // Handle potential markdown code block wrapping
+    if (jsonString.startsWith("```json") || jsonString.startsWith("```")) {
+      jsonString = jsonString
+        .replace(/^```json/, '')
+        .replace(/^```/, '')
+        .replace(/```$/, '')
+        .trim();
+    }
+    
+    try {
+      const parsed = JSON.parse(jsonString) as AIResponse;
+      
+      // Create valid suggestions with more defensive checks
+      const validSuggestions = ((parsed?.reminders || [])
+        .filter(reminder => {
+          if (!reminder) return false;
+          
+          // Add validation for description quality with null/undefined checks
+          const hasGoodDescription = 
+            reminder.description?.length > 20 && // Minimum length
+            reminder.description !== reminder.title && // Not same as title
+            reminder.description !== reminder.appName && // Not same as app name
+            !String(reminder.description).includes('undefined') && // No undefined values
+            (reminder.confidence === undefined || reminder.confidence >= 0.7); // Minimum confidence
+            
+          return hasGoodDescription;
+        })
+        .map(reminder => ({
+          ...reminder,
+          priority: reminder.priority || 'medium',
+          // Add a timestamp to each reminder for display purposes
+          createdAt: new Date().toISOString()
+        })));
 
-    return {
-      reminderSuggestions: validSuggestions,
-      generalInsights: parsed.insights?.filter(insight => insight.length > 10) || []
-    };
+      return {
+        reminderSuggestions: validSuggestions,
+        generalInsights: (parsed?.insights?.filter(insight => 
+          insight && typeof insight === 'string' && insight.length > 10
+        ) || [])
+      };
+    } catch (innerError) {
+      console.error('Failed to parse extracted JSON content:', innerError);
+      console.log('Attempted to parse:', jsonString);
+      return { reminderSuggestions: [], generalInsights: [] };
+    }
   } catch (error) {
-    console.error('Failed to parse AI response as JSON:', error);
+    console.error('Failed to extract JSON from AI response:', error);
     return { reminderSuggestions: [], generalInsights: [] };
   }
 }
@@ -53,22 +82,66 @@ function extractSuggestionsFromText(text: string): AnalysisResponse {
 // Update the createAIPrompt function to limit data size
 
 function createAIPrompt(activities: Activity[]): string {
-  const activityLog = activities.slice(-20).map((a) => ({
-    timestamp: new Date(a.content.timestamp).toLocaleTimeString(),
-    appName: a.content.appName || 'Unknown',
-    windowName: a.content.windowName || 'N/A',
-    text: a.content.text?.substring(0, 30) || 'N/A',
-    duration: 0 // You can calculate duration if needed
-  }));
+  // Process activities to calculate durations and identify brief interactions
+  const processedActivities: {
+    appName: string;
+    windowName: string;
+    text: string;
+    duration: number;
+    visits: number;
+    briefInteraction: boolean;
+  }[] = [];
+  const activityMap = new Map();
+  
+  // First pass to group by app+window
+  activities.slice(-30).forEach(a => {
+    const key = `${a.content.appName || 'Unknown'}-${a.content.windowName || 'N/A'}`;
+    const timestamp = new Date(a.content.timestamp).getTime();
+    
+    if (!activityMap.has(key)) {
+      activityMap.set(key, {
+        appName: a.content.appName || 'Unknown',
+        windowName: a.content.windowName || 'N/A',
+        firstSeen: timestamp,
+        lastSeen: timestamp,
+        text: a.content.text?.substring(0, 30) || 'N/A',
+        visits: 1
+      });
+    } else {
+      const existing = activityMap.get(key);
+      existing.lastSeen = timestamp;
+      existing.visits += 1;
+    }
+  });
+  
+  // Convert to array and calculate duration
+  activityMap.forEach((info, key) => {
+    const duration = (info.lastSeen - info.firstSeen) / 1000; // in seconds
+    processedActivities.push({
+      appName: info.appName,
+      windowName: info.windowName,
+      text: info.text,
+      duration: duration,
+      visits: info.visits,
+      briefInteraction: duration < 20 // Flag for brief interactions
+    });
+  });
 
-  return `Analyze these activities and return a JSON object with actionable reminders. Each reminder must include a meaningful description of what needs attention.
+  // Sort to prioritize brief interactions
+  processedActivities.sort((a, b) => {
+    if (a.briefInteraction && !b.briefInteraction) return -1;
+    if (!a.briefInteraction && b.briefInteraction) return 1;
+    return 0;
+  });
+
+  return `Analyze these activities and return a JSON object with actionable reminders. Focus primarily on brief interactions (less than 20 seconds) as these often represent incomplete tasks.
 
 Required JSON Structure:
 {
   "reminders": [
     {
       "title": "Brief action-oriented title",
-      "description": "Detailed description explaining why this needs attention and what action to take. Include context from the window name if relevant.",
+      "description": "Detailed (but brief) description explaining why this needs attention and what action to take. Include context from the window name if relevant.",
       "appName": "string",
       "windowName": "string",
       "shouldRemind": boolean,
@@ -87,16 +160,16 @@ Guidelines for descriptions:
 3. Must incorporate context from window names
 4. Must be specific and actionable
 5. For chat apps, mention the channel/conversation that needs follow-up
-
-Example good description:
-"Return to the #screenpipe-hackathon channel where you were discussing project updates. There might be pending messages or discussions that need your response."
+6. ONLY include apps with brief interactions (duration < 20 seconds) as reminders
+7. IGNORE apps with longer interactions as they were likely completed tasks
+8. Screenpipe is desktop app, so you may ignore it in reminders
 
 Example bad description:
 "Discord" (too vague, no context, not actionable)
 
-Activities: ${JSON.stringify(activityLog)}
+Activities: ${JSON.stringify(processedActivities)}
 
-Remember: Only include reminders if there's a genuine reason for follow-up, and always provide detailed, actionable descriptions.`;
+Remember: Only include reminders for brief interactions (< 20 seconds), as these likely represent incomplete tasks that need follow-up. Always provide detailed, actionable descriptions.`;
 }
 
 // Now update the POST handler to use this function
