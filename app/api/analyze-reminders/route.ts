@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { generateText } from 'ai';
 import { ollama } from 'ollama-ai-provider';
 import { pipe } from '@screenpipe/js';
-import { ReminderSuggestion, AnalysisResponse } from '../../../types/responses';
+import { ReminderSuggestion, AnalysisResponse, AIResponse } from '@/types/responses';
 
 interface Activity {
   content: {
@@ -16,54 +16,35 @@ interface Activity {
 // 🛠 Extract structured reminders from AI response text
 function extractSuggestionsFromText(text: string): AnalysisResponse {
   try {
-    const suggestions: ReminderSuggestion[] = [];
-    const insights: string[] = [];
+    const jsonMatch = text.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) return { reminderSuggestions: [], generalInsights: [] };
+
+    const parsed = JSON.parse(jsonMatch[0]) as AIResponse;
     
-    // Extract Reminder Suggestions
-    const reminderSection = text.match(/### Reminder Suggestions([\s\S]*?)(?=###|$)/)?.[1] || '';
-    const suggestionBlocks = reminderSection.split(/\d+\.\s+\*\*/);
-    
-    for (const block of suggestionBlocks) {
-      if (!block.trim()) continue;
-      
-      const titleMatch = block.match(/Title:\s*(.*)/);
-      const descMatch = block.match(/Description:\s*(.*)/);
-      const appMatch = block.match(/App Name:\s*(.*)/);
-      const windowMatch = block.match(/Window Name:\s*(.*)/);
-      const shouldRemindMatch = block.match(/Should Remind:\s*(true|false)/);
-      
-      if (titleMatch && descMatch && appMatch) {
-        suggestions.push({
-          title: titleMatch[1].trim(),
-          description: descMatch[1].trim(),
-          appName: appMatch[1].trim(),
-          windowName: windowMatch ? windowMatch[1].trim() : undefined,
-          shouldRemind: shouldRemindMatch ? shouldRemindMatch[1].toLowerCase() === 'true' : true
-        });
-      }
-    }
-    
-    // Extract General Insights
-    const insightsSection = text.match(/### General Insights([\s\S]*?)(?=###|$)/)?.[1] || '';
-    const insightLines = insightsSection.split(/\d+\.\s+\*\*/);
-    
-    for (const line of insightLines) {
-      const trimmed = line.trim();
-      if (trimmed) {
-        insights.push(trimmed);
-      }
-    }
-    
+    const validSuggestions = (parsed.reminders || [])
+      .filter(reminder => {
+        // Add validation for description quality
+        const hasGoodDescription = 
+          reminder.description.length > 20 && // Minimum length
+          reminder.description !== reminder.title && // Not same as title
+          reminder.description !== reminder.appName && // Not same as app name
+          !reminder.description.includes('undefined') && // No undefined values
+          reminder.confidence >= 0.7; // Minimum confidence
+
+        return hasGoodDescription;
+      })
+      .map(reminder => ({
+        ...reminder,
+        priority: reminder.priority || 'medium'
+      }));
+
     return {
-      reminderSuggestions: suggestions,
-      generalInsights: insights
+      reminderSuggestions: validSuggestions,
+      generalInsights: parsed.insights?.filter(insight => insight.length > 10) || []
     };
   } catch (error) {
-    console.error('Failed to parse response:', error);
-    return {
-      reminderSuggestions: [],
-      generalInsights: []
-    };
+    console.error('Failed to parse AI response as JSON:', error);
+    return { reminderSuggestions: [], generalInsights: [] };
   }
 }
 
@@ -71,36 +52,51 @@ function extractSuggestionsFromText(text: string): AnalysisResponse {
 // Create a dedicated function for prompt creation
 // Update the createAIPrompt function to limit data size
 
-function createAIPrompt(activities: Activity[], logs: any[] = []): string {
-  // Limit to maximum 20 most recent activities to prevent payload size issues
-  const limitedActivities = activities.slice(-20);
-  
-  // Format activity log for the prompt - limit text content length
-  const activityLog = limitedActivities.map((a) => ({
+function createAIPrompt(activities: Activity[]): string {
+  const activityLog = activities.slice(-20).map((a) => ({
     timestamp: new Date(a.content.timestamp).toLocaleTimeString(),
     appName: a.content.appName || 'Unknown',
     windowName: a.content.windowName || 'N/A',
-    text: a.content.text?.substring(0, 30) || 'N/A'
+    text: a.content.text?.substring(0, 30) || 'N/A',
+    duration: 0 // You can calculate duration if needed
   }));
 
-  return `Analyze these user activities and provide reminder suggestions in this exact format:
+  return `Analyze these activities and return a JSON object with actionable reminders. Each reminder must include a meaningful description of what needs attention.
 
-### Reminder Suggestions
+Required JSON Structure:
+{
+  "reminders": [
+    {
+      "title": "Brief action-oriented title",
+      "description": "Detailed description explaining why this needs attention and what action to take. Include context from the window name if relevant.",
+      "appName": "string",
+      "windowName": "string",
+      "shouldRemind": boolean,
+      "confidence": number (0.0-1.0),
+      "priority": "low" | "medium" | "high"
+    }
+  ],
+  "insights": [
+    "Meaningful insights about user's activity patterns"
+  ]
+}
 
-For each suggestion:
-1. **Title**: [brief title]
-   * Description: [detailed description]
-   * App Name: [app name]
-   * Window Name: [window name if relevant]
-   * Should Remind: [true/false]
+Guidelines for descriptions:
+1. Must explain WHY this needs attention
+2. Must suggest WHAT action to take
+3. Must incorporate context from window names
+4. Must be specific and actionable
+5. For chat apps, mention the channel/conversation that needs follow-up
 
-### General Insights
+Example good description:
+"Return to the #screenpipe-hackathon channel where you were discussing project updates. There might be pending messages or discussions that need your response."
 
-1. **[First Insight]**
-2. **[Second Insight]**
-3. **[Third Insight]**
+Example bad description:
+"Discord" (too vague, no context, not actionable)
 
-Please ensure each reminder includes all fields and follows the exact format above.`;
+Activities: ${JSON.stringify(activityLog)}
+
+Remember: Only include reminders if there's a genuine reason for follow-up, and always provide detailed, actionable descriptions.`;
 }
 
 // Now update the POST handler to use this function
@@ -208,7 +204,7 @@ export async function POST(request: Request) {
         modelResponse = `Unable to generate AI analysis. Error with OpenAI-compatible API using model ${aiModel}.`;
       }
     }
-
+    console.log(modelResponse);
     // Extract structured suggestions from AI response
     const suggestions = extractSuggestionsFromText(modelResponse);
 

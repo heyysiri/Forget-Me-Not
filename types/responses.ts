@@ -4,6 +4,13 @@ export interface ReminderSuggestion {
   appName: string;
   windowName?: string;
   shouldRemind: boolean;
+  confidence: number;
+  priority: 'low' | 'medium' | 'high';
+}
+
+export interface AIResponse {
+  reminders: ReminderSuggestion[];
+  insights: string[];
 }
 
 export interface AnalysisResponse {

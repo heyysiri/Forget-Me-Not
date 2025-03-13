@@ -514,42 +514,18 @@ const analyzeAppUsage = async (activities: Activity[]) => {
     return;
   }
 
-  console.log(`Smart Reminder: Analyzing ${activities.length} activities using AI`);
+  console.log(`Smart Reminder: Analyzing ${activities.length} activities`);
   
-  // Limit to maximum 20 activities to prevent payload size issues
   const limitedActivities = activities.length > 50 
     ? activities.slice(-50) 
     : activities;
   
-  if (activities.length > 50) {
-    console.log(`Smart Reminder: Limited to ${limitedActivities.length} most recent activities to prevent payload size issues`);
-  }
-  
-  // Log the activity data we're sending to AI
-  console.log("Smart Reminder: Activity log for AI analysis:");
-  limitedActivities.forEach((activity, index) => {
-    const time = new Date(activity.content.timestamp).toLocaleTimeString();
-    const appName = activity.content.appName || 'Unknown';
-    const windowName = activity.content.windowName || '';
-    
-    console.log(
-      `  ${index + 1}. [${time}] App: ${appName} | Window: ${windowName || 'N/A'} | ` + 
-      `Text: ${activity.content.text?.substring(0, 30) ?? ''}${(activity.content.text?.length ?? 0) > 30 ? '...' : ''}`
-    );
-  });
-  
   try {
-    // Create the prompt for AI analysis
-    const prompt = createAIPrompt(limitedActivities);
-    
-    // Send to our custom API endpoint for reminder analysis
+    // Send to our analyze-reminders endpoint
     const response = await fetch('/api/analyze-reminders', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ 
-        activities: limitedActivities,
-        prompt
-      }),
+      body: JSON.stringify({ activities: limitedActivities }),
     });
 
     if (!response.ok) {
@@ -557,34 +533,18 @@ const analyzeAppUsage = async (activities: Activity[]) => {
     }
     
     const data = await response.json();
-    console.log("Smart Reminder: Received AI analysis:", data.analysis);
     
-    // Update the AI analysis state
-    setAiAnalysis(data.analysis);
-    
-    // Process suggestions from AI
-    if (data.suggestions && Array.isArray(data.suggestions)) {
-      console.log("Smart Reminder: Processing AI suggestions:", data.suggestions);
+    // Process suggestions from AI response
+    if (data.reminderSuggestions && Array.isArray(data.reminderSuggestions)) {
+      console.log("Smart Reminder: Processing AI suggestions:", data.reminderSuggestions);
       
-      data.suggestions.forEach((suggestion: any) => {
+      data.reminderSuggestions.forEach((suggestion: { shouldRemind: any; title: string; description: string; appName: string | undefined; windowName: string | undefined; }) => {
         if (suggestion.shouldRemind) {
           showSuggestionNotification(
             suggestion.title, 
             suggestion.description,
             suggestion.appName,
             suggestion.windowName
-          );
-        }
-      });
-    } else {
-      // Fallback if suggestions aren't provided by the API
-      const suggestions = extractSuggestionsFromAnalysis(data.analysis);
-      suggestions.forEach(suggestion => {
-        if (suggestion.shouldNotify) {
-          showSuggestionNotification(
-            suggestion.title, 
-            suggestion.description,
-            suggestion.appName
           );
         }
       });
@@ -596,117 +556,6 @@ const analyzeAppUsage = async (activities: Activity[]) => {
   }
 };
 
-// Create a helper function to format the prompt for AI analysis
-const createAIPrompt = (activities: Activity[]): string => {
-  // Format activity log for the prompt
-  const activityLog = activities
-    .map((a) => {
-      const time = new Date(a.content.timestamp).toLocaleTimeString();
-      const windowName = a.content.windowName || '';
-      const appName = a.content.appName || 'Unknown';
-      
-      return `- Time: ${time} | App: ${appName} | Window: ${windowName || 'N/A'} | Text: ${a.content.text?.substring(0, 50) || 'N/A'}`;
-    })
-    .join('\n');
-
-  return `# Smart Reminder Analysis
-
-## Activity Log
-${activityLog}
-
-## Analysis Task
-Please analyze the user's app usage patterns to identify potential reminders they might need.
-Focus on the following patterns:
-
-1. Brief app interactions (less than 20 seconds in an app) that might indicate unfinished tasks
-2. Quick switches between apps that suggest the user might have been interrupted
-3. Opening apps that are typically used for specific tasks (banking, calendar, email, etc.) but only briefly
-
-## Special Instructions for Window Names
-- If the window name is specific and meaningful (like "Project Proposal" or "Invoice #1234"), use BOTH the app name AND window name in your analysis
-- If the window name is generic or random text (like "New Tab" or random characters), focus primarily on the app name
-- Always prioritize specific window names that suggest tasks or content
-
-## Response Format
-Please provide your analysis in the following structure:
-
-### Reminder Suggestions
-For each potential reminder, provide:
-- Title: [Brief title for the reminder]
-- Description: [Detailed description]
-- App Name: [Associated application]
-- Window Name: [Associated window, if meaningful]
-- Should Remind: true/false (whether this should trigger a notification)
-
-### General Insights
-[Any broader patterns or insights about the user's app usage]`;
-};
-  
-  // Extract suggestion notifications from AI analysis text
-  const extractSuggestionsFromAnalysis = (analysis: string): { 
-    title: string;
-    description: string;
-    shouldNotify: boolean;
-    appName?: string;
-  }[] => {
-    console.log("Smart Reminder: Extracting suggestions from analysis text");
-    const suggestions = [];
-    
-    // Try to find reminder suggestions in the AI response
-    const reminderSectionRegex = /reminder suggestions:?[\s\S]*?(?=general insights:|$)/i;
-    const reminderSection = reminderSectionRegex.exec(analysis)?.[0] || "";
-    
-    // If we found a reminder section, extract each reminder
-    if (reminderSection) {
-      // Look for patterns like "App Name: Calendar" or similar
-      const appNameRegex = /app name:?\s*([A-Za-z0-9\s]+)/gi;
-      let appNameMatch;
-      
-      while ((appNameMatch = appNameRegex.exec(reminderSection)) !== null) {
-        // Get the app name
-        const appName = appNameMatch[1].trim();
-        
-        // Try to find a title and description near this app name
-        const contextStart = Math.max(0, appNameMatch.index - 200);
-        const contextEnd = Math.min(reminderSection.length, appNameMatch.index + 200);
-        const context = reminderSection.substring(contextStart, contextEnd);
-        
-        const titleMatch = /title:?\s*([^\n]+)/i.exec(context);
-        const descMatch = /description:?\s*([^\n]+)/i.exec(context);
-        
-        if (titleMatch && descMatch) {
-          suggestions.push({
-            title: titleMatch[1].trim(),
-            description: descMatch[1].trim(),
-            shouldNotify: true,
-            appName
-          });
-        }
-      }
-    }
-    
-    // If no structured reminders were found, look for any mentions of brief app usage
-    if (suggestions.length === 0) {
-      const briefUsageRegex = /(briefly|quickly) (used|opened|checked|visited) ([A-Za-z0-9\s]+)/gi;
-      let match;
-      
-      while ((match = briefUsageRegex.exec(analysis)) !== null) {
-        const action = match[1];  // briefly/quickly
-        const verb = match[2];    // used/opened/etc
-        const appName = match[3]; // app name
-        
-        suggestions.push({
-          title: `Quick ${appName} check detected`,
-          description: `You ${action} ${verb} ${appName}. Need to return to it later?`,
-          shouldNotify: true,
-          appName
-        });
-      }
-    }
-    
-    return suggestions;
-  };
-  
   // Show notification with suggestion
   const showSuggestionNotification = async (title: string, description: string, appName?: string, windowName?: string) => {
     // Generate a unique ID for this reminder
