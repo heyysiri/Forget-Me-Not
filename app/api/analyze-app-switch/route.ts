@@ -106,81 +106,70 @@ export async function POST(request: Request) {
 
 // Create default prompt if none provided
 function createDefaultPrompt(activities: Activity[]): string {
-  const activityLog = activities
-    .map((a) => {
-      const time = new Date(a.content.timestamp).toLocaleTimeString();
-      return `- Time: ${time} | App: ${a.content.appName || 'Unknown'} | Window: ${a.content.windowName || 'N/A'} | Text: ${a.content.text?.substring(0, 50) || 'N/A'}`;
-    })
-    .join('\n');
-    console.log(activityLog);
+  const activityLog = activities.map((a) => ({
+    timestamp: new Date(a.content.timestamp).toLocaleTimeString(),
+    appName: a.content.appName || 'Unknown',
+    windowName: a.content.windowName || 'N/A',
+    text: a.content.text?.substring(0, 50) || 'N/A'
+  }));
 
-  return `# Smart Reminder Analysis
+  return `Analyze these app switching patterns and generate suggestions. 
+Response must be valid JSON matching this TypeScript interface:
 
-## Activity Log
-${activityLog}
+interface Response {
+  suggestions: Array<{
+    title: string;
+    description: string;
+    appName: string;
+    shouldRemind: boolean;
+    switchPattern: {
+      from: string;
+      to: string;
+      frequency: number;
+    };
+    confidence: number; // 0-1
+  }>;
+  patterns: {
+    frequentSwitches: Array<string[]>;
+    potentialInterruptions: string[];
+  };
+}
 
-## Analysis Task
-Please analyze the user's app usage patterns to identify potential reminders they might need. 
-Focus on the following patterns:
+Activities:
+${JSON.stringify(activityLog, null, 2)}
 
-1. Brief app interactions (less than 10 seconds in an app) that might indicate unfinished tasks
-2. Quick switches between apps that suggest the user might have been interrupted
-3. Opening apps that are typically used for specific tasks (banking, calendar, email, etc.) but only briefly
+Rules:
+1. Identify rapid app switches (<10s)
+2. Look for context switches
+3. Find interrupted workflows
+4. Only include high-confidence suggestions
 
-## Response Format
-Provide your analysis in the following format:
-
-1. **Reminder Suggestions**: For each potential reminder, include:
-   - Title: A short title for the notification
-   - Description: A brief, helpful message asking if they need to return to a task
-   - App Name: The relevant app name
-   - Should Remind: true/false (whether this is important enough to show a notification)
-
-Focus on being helpful and non-intrusive. Only suggest reminders for truly incomplete tasks or brief interactions that suggest the user might need to revisit something later.`;
+Respond ONLY with valid JSON.`;
 }
 
 // Extract suggestions from AI response
-function extractSuggestions(analysis: string): Array<{
-  title: string;
-  description: string;
-  appName?: string;
-  shouldRemind: boolean;
-}> {
-  const suggestions = [];
-  
-  // Try to find reminder suggestions in the AI response
-  const reminderSectionRegex = /reminder suggestions:?[\s\S]*?(?=general insights:|$)/i;
-  const reminderSection = reminderSectionRegex.exec(analysis)?.[0] || "";
-  
-  // If we found a reminder section, extract each reminder
-  if (reminderSection) {
-    // Look for patterns like "Title: Something" or similar
-    const titleRegex = /title:?\s*([^\n]+)/gi;
-    let match;
+function extractSuggestions(analysis: string): Array<any> {
+  try {
+    // Try to find a JSON object in the response
+    const jsonMatch = analysis.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) return [];
     
-    while ((match = titleRegex.exec(reminderSection)) !== null) {
-      // Get the title
-      const title = match[1].trim();
-      
-      // Try to find a description and app name near this title
-      const contextStart = Math.max(0, match.index - 50);
-      const contextEnd = Math.min(reminderSection.length, match.index + 300);
-      const context = reminderSection.substring(contextStart, contextEnd);
-      
-      const descMatch = /description:?\s*([^\n]+)/i.exec(context);
-      const appNameMatch = /app name:?\s*([^\n]+)/i.exec(context);
-      const shouldRemindMatch = /should remind:?\s*(true|false)/i.exec(context);
-      
-      if (descMatch) {
-        suggestions.push({
-          title: title,
-          description: descMatch[1].trim(),
-          appName: appNameMatch ? appNameMatch[1].trim() : undefined,
-          shouldRemind: shouldRemindMatch ? shouldRemindMatch[1].toLowerCase() === 'true' : true
-        });
-      }
+    const parsed = JSON.parse(jsonMatch[0]);
+    
+    if (!parsed.suggestions || !Array.isArray(parsed.suggestions)) {
+      return [];
     }
+    
+    return parsed.suggestions.map((suggestion: { title: any; description: any; appName: any; shouldRemind: any; confidence: any; switchPattern: any; }) => ({
+      title: suggestion.title,
+      description: suggestion.description,
+      appName: suggestion.appName,
+      shouldRemind: suggestion.shouldRemind,
+      confidence: suggestion.confidence,
+      switchPattern: suggestion.switchPattern
+    }));
+  } catch (error) {
+    console.error('Failed to parse AI response as JSON:', error);
+    return [];
   }
-  
-  return suggestions;
 }

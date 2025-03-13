@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { generateText } from 'ai';
 import { ollama } from 'ollama-ai-provider';
 import { pipe } from '@screenpipe/js';
+import { ReminderSuggestion, AnalysisResponse } from '../../../types/responses';
 
 interface Activity {
   content: {
@@ -12,77 +13,58 @@ interface Activity {
   };
 }
 
-interface ReminderSuggestion {
-  title: string;
-  description: string;
-  appName?: string;
-  windowName?: string;
-  shouldRemind: boolean;
-}
-
 // 🛠 Extract structured reminders from AI response text
-function extractSuggestionsFromText(text: string): ReminderSuggestion[] {
-  const suggestions: ReminderSuggestion[] = [];
-  
-  // Try to find reminder suggestions in a structured format
-  const reminderSectionRegex = /reminder suggestions:?[\s\S]*?(?=general insights:|$)/i;
-  const reminderSection = reminderSectionRegex.exec(text)?.[0] || "";
-  
-  if (reminderSection) {
-    // Look for patterns like "App Name: Calendar" or similar
-    const appNameRegex = /app name:?\s*([A-Za-z0-9\s]+)/gi;
-    let appNameMatch;
+function extractSuggestionsFromText(text: string): AnalysisResponse {
+  try {
+    const suggestions: ReminderSuggestion[] = [];
+    const insights: string[] = [];
     
-    while ((appNameMatch = appNameRegex.exec(reminderSection)) !== null) {
-      // Get the app name
-      const appName = appNameMatch[1].trim();
+    // Extract Reminder Suggestions
+    const reminderSection = text.match(/### Reminder Suggestions([\s\S]*?)(?=###|$)/)?.[1] || '';
+    const suggestionBlocks = reminderSection.split(/\d+\.\s+\*\*/);
+    
+    for (const block of suggestionBlocks) {
+      if (!block.trim()) continue;
       
-      // Try to find a title and description near this app name
-      const contextStart = Math.max(0, appNameMatch.index - 300); // Increased context size to find window name
-      const contextEnd = Math.min(reminderSection.length, appNameMatch.index + 300);
-      const context = reminderSection.substring(contextStart, contextEnd);
+      const titleMatch = block.match(/Title:\s*(.*)/);
+      const descMatch = block.match(/Description:\s*(.*)/);
+      const appMatch = block.match(/App Name:\s*(.*)/);
+      const windowMatch = block.match(/Window Name:\s*(.*)/);
+      const shouldRemindMatch = block.match(/Should Remind:\s*(true|false)/);
       
-      const titleMatch = /title:?\s*([^\n]+)/i.exec(context);
-      const descMatch = /description:?\s*([^\n]+)/i.exec(context);
-      const windowNameMatch = /window name:?\s*([^\n]+)/i.exec(context);
-      const shouldRemindMatch = /should remind:?\s*(true|false)/i.exec(context);
-      
-      if (titleMatch && descMatch) {
+      if (titleMatch && descMatch && appMatch) {
         suggestions.push({
           title: titleMatch[1].trim(),
           description: descMatch[1].trim(),
-          appName,
-          windowName: windowNameMatch ? windowNameMatch[1].trim() : undefined,
+          appName: appMatch[1].trim(),
+          windowName: windowMatch ? windowMatch[1].trim() : undefined,
           shouldRemind: shouldRemindMatch ? shouldRemindMatch[1].toLowerCase() === 'true' : true
         });
       }
     }
-  }
-  
-  // If no structured reminders were found, look for any mentions of brief app usage
-  if (suggestions.length === 0) {
-    const briefUsageRegex = /(briefly|quickly) (used|opened|checked|visited) ([A-Za-z0-9\s]+)(?:\s+(?:with|in|on)\s+(?:window|tab)?\s*['":]?\s*([^'".,\n]+))?/gi;
-    let match;
     
-    while ((match = briefUsageRegex.exec(text)) !== null) {
-      const action = match[1];  // briefly/quickly
-      const verb = match[2];    // used/opened/etc
-      const appName = match[3]; // app name
-      const windowName = match[4]; // window name if captured
-      
-      suggestions.push({
-        title: `Quick ${appName} check detected`,
-        description: windowName && windowName.trim() !== "" 
-          ? `You ${action} ${verb} ${appName} with window "${windowName}". Need to return to it later?`
-          : `You ${action} ${verb} ${appName}. Need to return to it later?`,
-        appName,
-        windowName: windowName && windowName.trim() !== "" ? windowName.trim() : undefined,
-        shouldRemind: true
-      });
+    // Extract General Insights
+    const insightsSection = text.match(/### General Insights([\s\S]*?)(?=###|$)/)?.[1] || '';
+    const insightLines = insightsSection.split(/\d+\.\s+\*\*/);
+    
+    for (const line of insightLines) {
+      const trimmed = line.trim();
+      if (trimmed) {
+        insights.push(trimmed);
+      }
     }
+    
+    return {
+      reminderSuggestions: suggestions,
+      generalInsights: insights
+    };
+  } catch (error) {
+    console.error('Failed to parse response:', error);
+    return {
+      reminderSuggestions: [],
+      generalInsights: []
+    };
   }
-  
-  return suggestions;
 }
 
 // 🛠 Handle AI-based reminder analysis
@@ -94,50 +76,31 @@ function createAIPrompt(activities: Activity[], logs: any[] = []): string {
   const limitedActivities = activities.slice(-20);
   
   // Format activity log for the prompt - limit text content length
-  const activityLog = limitedActivities
-    .map((a) => {
-      const time = new Date(a.content.timestamp).toLocaleTimeString();
-      const windowName = a.content.windowName || '';
-      const appName = a.content.appName || 'Unknown';
-      
-      // Limit text length to 30 characters to reduce payload size
-      const textContent = a.content.text?.substring(0, 30) || 'N/A';
-      
-      return `- Time: ${time} | App: ${appName} | Window: ${windowName || 'N/A'} | Text: ${textContent}`;
-    })
-    .join('\n');
+  const activityLog = limitedActivities.map((a) => ({
+    timestamp: new Date(a.content.timestamp).toLocaleTimeString(),
+    appName: a.content.appName || 'Unknown',
+    windowName: a.content.windowName || 'N/A',
+    text: a.content.text?.substring(0, 30) || 'N/A'
+  }));
 
-  return `# Smart Reminder Analysis
-
-## Activity Log
-${activityLog}
-
-## Analysis Task
-Please analyze the user's app usage patterns to identify potential reminders they might need.
-Focus on the following patterns:
-
-1. Brief app interactions (less than 20 seconds in an app) that might indicate unfinished tasks
-2. Quick switches between apps that suggest the user might have been interrupted
-3. Opening apps that are typically used for specific tasks (banking, calendar, email, etc.) but only briefly
-
-## Special Instructions for Window Names
-- If the window name is specific and meaningful (like "Project Proposal" or "Invoice #1234"), use BOTH the app name AND window name in your analysis
-- If the window name is generic or random text (like "New Tab" or random characters), focus primarily on the app name
-- Always prioritize specific window names that suggest tasks or content
-
-## Response Format
-Please provide your analysis in the following structure:
+  return `Analyze these user activities and provide reminder suggestions in this exact format:
 
 ### Reminder Suggestions
-For each potential reminder, provide:
-- Title: [Brief title for the reminder]
-- Description: [Detailed description]
-- App Name: [Associated application]
-- Window Name: [Associated window, if meaningful]
-- Should Remind: true/false (whether this should trigger a notification)
+
+For each suggestion:
+1. **Title**: [brief title]
+   * Description: [detailed description]
+   * App Name: [app name]
+   * Window Name: [window name if relevant]
+   * Should Remind: [true/false]
 
 ### General Insights
-[Any broader patterns or insights about the user's app usage]`;
+
+1. **[First Insight]**
+2. **[Second Insight]**
+3. **[Third Insight]**
+
+Please ensure each reminder includes all fields and follows the exact format above.`;
 }
 
 // Now update the POST handler to use this function
@@ -205,6 +168,7 @@ export async function POST(request: Request) {
 
         console.log("API: Ollama response received successfully");
         modelResponse = generateTextResult.text || 'No response from model';
+        console.log("API: Ollama response:", modelResponse);
       } catch (error) {
         console.error("API: Error using Ollama:", error);
         modelResponse = `Unable to generate AI analysis. Error with Ollama model ${aiModel}.`;
@@ -250,7 +214,7 @@ export async function POST(request: Request) {
 
     return NextResponse.json({
       analysis: modelResponse,
-      suggestions,
+      ...extractSuggestionsFromText(modelResponse),
       timestamp: new Date().toISOString(),
     });
 
