@@ -341,7 +341,7 @@ const fetchAppActivity = async () => {
     console.log(`Smart Reminder: Fetching activity from ${startTime} to ${now}`);
 
     const results = await pipe.queryScreenpipe({
-      contentType: "ocr",
+      contentType: "audio+ocr",
       startTime,
       endTime: now,
       limit: 50,
@@ -355,14 +355,28 @@ const fetchAppActivity = async () => {
 
     console.log(`Smart Reminder: Found ${results.data.length} new events`);
 
-    const activities: Activity[] = results.data.map(item => ({
-      content: {
-        timestamp: item.content.timestamp,
-        appName: 'appName' in item.content ? item.content.appName : '',
-        windowName: 'windowName' in item.content ? item.content.windowName : '', // Ensure windowName exists
-        text: 'text' in item.content ? item.content.text : undefined
+    const activities: Activity[] = results.data.map(item => {
+      if ('transcription' in item.content) {
+        console.log("Smart Reminder: Found voice command event");
+        return {
+          content: {
+            timestamp: item.content.timestamp,
+            appName: "Voice",
+            windowName: "Voice Command",
+            text: item.content.transcription
+          }
+        };
+      } else {
+        return {
+          content: {
+            timestamp: item.content.timestamp,
+            appName: 'appName' in item.content ? item.content.appName : '',
+            windowName: 'windowName' in item.content ? item.content.windowName : '',
+            text: 'text' in item.content ? item.content.text : undefined
+          }
+        };
       }
-    }));
+    });
 
     activitiesQueueRef.current = [...activitiesQueueRef.current, ...activities];
 
@@ -751,14 +765,14 @@ const analyzeAppUsage = async (activities: Activity[]) => {
       <Card>
         <CardHeader>
           <CardTitle>Smart Reminder</CardTitle>
-          <div className="flex items-center mt-2 bg-gradient-to-r from-purple-100 to-indigo-100 p-2 rounded-md">
+          {/* <div className="flex items-center mt-2 bg-gradient-to-r from-purple-100 to-indigo-100 p-2 rounded-md">
             <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" className="w-5 h-5 mr-2 text-purple-600">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
             </svg>
             <p className="text-sm text-purple-700">
               Works best with Ollama running <span className="font-semibold">llama3</span> or <span className="font-semibold">llama3.2</span>
             </p>
-          </div>
+          </div> */}
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="flex justify-between items-center">

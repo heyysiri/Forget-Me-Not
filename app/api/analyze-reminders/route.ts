@@ -163,6 +163,7 @@ Guidelines for descriptions:
 6. ONLY include apps with brief interactions (duration < 20 seconds) as reminders
 7. IGNORE apps with longer interactions as they were likely completed tasks
 8. Screenpipe is desktop app, so you may ignore it in reminders
+9. when we have a voice command give title and description as the text in voice command
 
 Example bad description:
 "Discord" (too vague, no context, not actionable)
@@ -195,7 +196,7 @@ export async function POST(request: Request) {
     console.log(`API: Analyzing ${activities.length} activities`);
     
     // Limit number of activities to prevent payload too large errors
-    const limitedActivities = activities.length > 20 ? activities.slice(-20) : activities;
+    const limitedActivities = activities.length > 30 ? activities.slice(-30) : activities;
     console.log(`API: Limited to ${limitedActivities.length} most recent activities`);
     
     // Use custom prompt if provided, otherwise create one
