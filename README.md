@@ -7,6 +7,7 @@ A smart reminder system that analyzes your app usage patterns and provides timel
 - **Real-time App Usage Monitoring**: Tracks your application switches and window changes
 - **AI-Powered Analysis**: Uses AI to detect patterns and suggest reminders
 - **Smart Notifications**: Intelligently batches notifications to avoid interruption
+- **Voice-Based Reminders**: Generate reminders from voice input
 - **Flexible AI Provider Support**: Works with:
   - Ollama (recommended with llama2 or llama3)
   - OpenAI-compatible APIs
@@ -65,6 +66,7 @@ The plugin will automatically connect to Ollama running on `http://localhost:114
 - Monitors app switches and window changes
 - Detects brief app interactions
 - Identifies interrupted tasks
+- Processes voice commands for reminder creation
 
 ### AI Analysis
 
@@ -94,10 +96,6 @@ The plugin will automatically connect to Ollama running on `http://localhost:114
 ## 🤝 Contributing
 
 Contributions are welcome! Please feel free to submit a Pull Request.
-
-## 📝 License
-
-This project is licensed under the MIT License - see the LICENSE file for details.
 
 ## 🙏 Acknowledgments
 
