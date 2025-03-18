@@ -178,16 +178,20 @@ Remember: Only include reminders for brief interactions (< 20 seconds), as these
 
 export async function POST(request: Request) {
   try {
-    // Get settings from Screenpipe directly in the API
-    const settings = await pipe.settings.getAll();
-    
     // Parse request body
     const body = await request.json();
-    const { activities, prompt: customPrompt } = body;
+    const { activities, prompt: customPrompt, settings } = body;
     
     if (!Array.isArray(activities)) {
       return NextResponse.json(
         { error: "Missing required activities array" },
+        { status: 400 }
+      );
+    }
+
+    if (!settings?.aiProviderType || !settings?.aiModel) {
+      return NextResponse.json(
+        { error: "Missing required AI settings" },
         { status: 400 }
       );
     }
@@ -210,20 +214,15 @@ export async function POST(request: Request) {
     }
     
     // Log request details
-    console.log(`API: Using AI provider ${settings.aiProviderType}`);
+    console.log(`API: Using AI provider ${settings.aiProviderType} with model ${settings.aiModel}`);
 
     let modelResponse: string;
-    let { aiProviderType, aiModel, aiUrl, openaiApiKey } = settings as {
-      aiProviderType: 'ollama' | 'native-ollama' | 'openai',
-      aiModel: string,
-      aiUrl: string,
-      openaiApiKey?: string
-    };
+    const { aiProviderType, aiModel, aiUrl, openaiApiKey } = settings;
 
     // Fix URL for native Ollama
-    if (aiProviderType === 'native-ollama') {
-      aiUrl = 'http://localhost:11434/api/generate';
-    }
+    const finalAiUrl = aiProviderType === 'native-ollama' 
+      ? 'http://localhost:11434/api/generate'
+      : aiUrl;
 
     // Ollama AI Processing
     if (aiProviderType === 'ollama' || aiProviderType === 'native-ollama') {
@@ -248,9 +247,9 @@ export async function POST(request: Request) {
     else {
       console.log("API: Using OpenAI-compatible API");
       try {
-        console.log(`API: OpenAI request sent to ${aiUrl} for model ${aiModel}`);
+        console.log(`API: OpenAI request sent to ${finalAiUrl} for model ${aiModel}`);
         
-        const response = await fetch(aiUrl, {
+        const response = await fetch(finalAiUrl, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -278,13 +277,13 @@ export async function POST(request: Request) {
         modelResponse = `Unable to generate AI analysis. Error with OpenAI-compatible API using model ${aiModel}.`;
       }
     }
-    console.log(modelResponse);
+
     // Extract structured suggestions from AI response
     const suggestions = extractSuggestionsFromText(modelResponse);
 
     return NextResponse.json({
       analysis: modelResponse,
-      ...extractSuggestionsFromText(modelResponse),
+      ...suggestions,
       timestamp: new Date().toISOString(),
     });
 

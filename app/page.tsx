@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState, useRef } from "react";
-import { pipe, ContentItem, ScreenpipeResponse as SDKScreenpipeResponse } from '@screenpipe/browser';
+import { pipe, ContentItem, ScreenpipeResponse as SDKScreenpipeResponse, Settings as ScreenpipeSettings } from '@screenpipe/browser';
 import { useToast } from "@/hooks/use-toast";
 import { ToastAction } from "@/components/ui/toast";
 import { Check, Clock, X, Play, Pause, AlertCircle } from "lucide-react";
@@ -9,6 +9,9 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Slider } from "@/components/ui/slider";
 import { Label } from "@/components/ui/label";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { OllamaModelsList } from "@/lib/ollama-models-list";
+import { useAiProvider } from "@/hooks/use-ai-provider";
 
 // Define types
 interface AppSwitchEvent {
@@ -38,17 +41,14 @@ interface Activity {
   };
 }
 
-interface Settings {
-  aiProviderType: string;
-  aiModel: string;
-  aiUrl: string;
-  openaiApiKey?: string;
+// Create a custom interface that extends Screenpipe Settings
+interface AppSettings extends ScreenpipeSettings {
   analysisFrequencyMin: number;
   notificationFrequencyMin: number;
 }
 
-const DEFAULT_ANALYSIS_FREQUENCY = 2; // 2 minutes
-const DEFAULT_NOTIFICATION_FREQUENCY = 5; // 5 minutes
+const DEFAULT_ANALYSIS_FREQUENCY = 5;
+const DEFAULT_NOTIFICATION_FREQUENCY = 30;
 const LOCALSTORAGE_TODO_KEY = 'smart-reminder-todos';
 const LOCALSTORAGE_SETTINGS_KEY = 'smart-reminder-settings';
 
@@ -66,17 +66,15 @@ export default function SmartReminderPage() {
   
   // AI analysis state
   const [aiAnalysis, setAiAnalysis] = useState<string | null>(null);
-  const [settings, setSettings] = useState<Settings | null>(null);
+  const [settings, setSettings] = useState<AppSettings | undefined>(undefined);
   const [loadingSettings, setLoadingSettings] = useState(true);
-  // const [pendingNotifications, setPendingNotifications] = useState<ReminderItem[]>([]);
-  // const [nextNotificationTime, setNextNotificationTime] = useState<Date | null>(null);
-  
+  const aiProviderStatus = useAiProvider(settings);
+
   // Session tracking refs
   const analysisIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const fetchIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const sessionStartTimeRef = useRef<string | null>(null);
   const activitiesQueueRef = useRef<Activity[]>([]);
-  // const notificationIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
   const { toast } = useToast();
 
@@ -98,14 +96,7 @@ export default function SmartReminderPage() {
     async function loadSettings() {
       try {
         const savedSettings = localStorage.getItem(LOCALSTORAGE_SETTINGS_KEY);
-        const defaultSettings = {
-          aiProviderType: 'ollama',
-          aiModel: 'llama2',
-          aiUrl: 'http://localhost:11434/api/generate',
-          analysisFrequencyMin: DEFAULT_ANALYSIS_FREQUENCY,
-          notificationFrequencyMin: DEFAULT_NOTIFICATION_FREQUENCY
-        };
-
+        
         if (savedSettings) {
           setSettings(JSON.parse(savedSettings));
           return;
@@ -120,25 +111,13 @@ export default function SmartReminderPage() {
         
         const data = await response.json();
         console.log("Smart Reminder: Settings loaded:", data);
-        const mergedSettings = {
-          ...defaultSettings,
-          ...data
-        };
         
-        setSettings(mergedSettings);
-        localStorage.setItem(LOCALSTORAGE_SETTINGS_KEY, JSON.stringify(mergedSettings));
+        setSettings(data);
+        localStorage.setItem(LOCALSTORAGE_SETTINGS_KEY, JSON.stringify(data));
       } catch (error) {
         console.error("Smart Reminder: Failed to load settings:", error);
-        setErrorMessage("Failed to load settings. Using fallback settings.");
-        
-        // Use fallback settings when API fails
-        setSettings({
-          aiProviderType: 'ollama',
-          aiModel: 'llama3',
-          aiUrl: 'http://localhost:11434/api/generate',
-          analysisFrequencyMin: DEFAULT_ANALYSIS_FREQUENCY,
-          notificationFrequencyMin: DEFAULT_NOTIFICATION_FREQUENCY
-        });
+        setErrorMessage("Failed to load settings. Please configure your settings first.");
+        setSettings(undefined);
       } finally {
         setLoadingSettings(false);
       }
@@ -539,7 +518,15 @@ const analyzeAppUsage = async (activities: Activity[]) => {
     const response = await fetch('/api/analyze-reminders', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ activities: limitedActivities }),
+      body: JSON.stringify({ 
+        activities: limitedActivities,
+        settings: {
+          aiProviderType: settings.aiProviderType,
+          aiModel: settings.aiModel,
+          aiUrl: settings.aiUrl,
+          openaiApiKey: settings.openaiApiKey
+        }
+      }),
     });
 
     if (!response.ok) {
@@ -716,6 +703,30 @@ const analyzeAppUsage = async (activities: Activity[]) => {
     console.log("Smart Reminder: isTracking state changed to:", isTracking);
   }, [isTracking]);
 
+  // Add this function to handle AI provider changes
+  const updateAiProvider = (value: string) => {
+    if (!settings) return;
+    const newSettings = {
+      ...settings,
+      aiProviderType: value as 'native-ollama' | 'openai' | 'screenpipe-cloud' | 'custom',
+      // Reset model when changing provider
+      aiModel: value === 'native-ollama' ? 'llama3.2:latest' : 'gpt-3.5-turbo'
+    };
+    setSettings(newSettings);
+    localStorage.setItem(LOCALSTORAGE_SETTINGS_KEY, JSON.stringify(newSettings));
+  };
+
+  // Add this function to handle model changes
+  const updateAiModel = (value: string) => {
+    if (!settings) return;
+    const newSettings = {
+      ...settings,
+      aiModel: value
+    };
+    setSettings(newSettings);
+    localStorage.setItem(LOCALSTORAGE_SETTINGS_KEY, JSON.stringify(newSettings));
+  };
+
   // Add this new function to show batched notifications
   // const showBatchNotification = async () => {
   //   if (pendingNotifications.length === 0) return;
@@ -878,6 +889,53 @@ const analyzeAppUsage = async (activities: Activity[]) => {
           <CardTitle>Analysis Settings</CardTitle>
         </CardHeader>
         <CardContent className="space-y-6">
+          <div className="space-y-2">
+            <Label>AI Provider</Label>
+            <Select
+              value={settings?.aiProviderType || 'native-ollama'}
+              onValueChange={updateAiProvider}
+            >
+              <SelectTrigger>
+                <SelectValue placeholder="Select AI provider" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="native-ollama">Ollama (Local)</SelectItem>
+                <SelectItem value="openai">OpenAI</SelectItem>
+                <SelectItem value="screenpipe-cloud">Screenpipe Cloud</SelectItem>
+                <SelectItem value="custom">Custom API</SelectItem>
+              </SelectContent>
+            </Select>
+            {!aiProviderStatus.isAvailable && (
+              <p className="text-sm text-red-500">{aiProviderStatus.error}</p>
+            )}
+          </div>
+
+          <div className="space-y-2">
+            <Label>AI Model</Label>
+            {settings?.aiProviderType === 'native-ollama' ? (
+              <OllamaModelsList
+                defaultValue={settings.aiModel}
+                onChange={updateAiModel}
+                disabled={!aiProviderStatus.isAvailable}
+              />
+            ) : (
+              <Select
+                value={settings?.aiModel || 'gpt-3.5-turbo'}
+                onValueChange={updateAiModel}
+                disabled={!aiProviderStatus.isAvailable}
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="Select model" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="gpt-3.5-turbo">GPT-3.5 Turbo</SelectItem>
+                  <SelectItem value="gpt-4">GPT-4</SelectItem>
+                  <SelectItem value="gpt-4-turbo">GPT-4 Turbo</SelectItem>
+                </SelectContent>
+              </Select>
+            )}
+          </div>
+
           <div className="space-y-2">
             <Label>Analysis Frequency (minutes)</Label>
             <Slider
