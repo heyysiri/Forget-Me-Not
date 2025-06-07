@@ -28,7 +28,7 @@ A smart reminder system that analyzes your app usage patterns and provides timel
 
 1. Clone this repository:
    ```bash
-   git clone [repository-url]
+   git clone [[repository-url]](https://github.com/heyysiri/Forget-Me-Not)
    cd forget_me_not
    ```
 
